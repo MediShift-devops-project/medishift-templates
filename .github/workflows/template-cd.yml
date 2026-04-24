@@ -1,0 +1,148 @@
+name: Template - CD Update Manifests
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        required: true
+        type: string
+      service_key:
+        required: true
+        type: string
+        # auth | staff | shift | leave | frontend
+      image_version:
+        required: true
+        type: string
+      branch:
+        required: true
+        type: string
+        # develop | main
+    secrets:
+      MANIFEST_REPO_PAT:
+        required: true
+      SMTP_USERNAME:
+        required: true
+      SMTP_PASSWORD:
+        required: true
+      ALERT_EMAIL:
+        required: true
+
+jobs:
+  update-manifests:
+    name: Update Helm Values - ${{ inputs.branch == 'main' && 'Production' || 'Development' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Target Values File
+        id: target
+        run: |
+          if [ "${{ inputs.branch }}" = "main" ]; then
+            echo "values_file=medishift-helm/values-prod.yaml" >> $GITHUB_OUTPUT
+            echo "environment=production" >> $GITHUB_OUTPUT
+            echo "namespace=medishift-prod" >> $GITHUB_OUTPUT
+          else
+            echo "values_file=medishift-helm/values-dev.yaml" >> $GITHUB_OUTPUT
+            echo "environment=development" >> $GITHUB_OUTPUT
+            echo "namespace=medishift-dev" >> $GITHUB_OUTPUT
+          fi
+          echo "Target file set for branch: ${{ inputs.branch }}"
+
+      - name: Checkout medishift-manifests Repo
+        uses: actions/checkout@v4
+        with:
+          repository: MediShift-devops-project/medishift-manifests
+          token: ${{ secrets.MANIFEST_REPO_PAT }}
+          ref: ${{ inputs.branch == 'main' && 'main' || 'develop' }}
+
+      - name: Install yq
+        run: |
+          wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Update Image Tag in Values File
+        run: |
+          VALUES_FILE="${{ steps.target.outputs.values_file }}"
+          SERVICE_KEY="${{ inputs.service_key }}"
+          NEW_TAG="${{ inputs.image_version }}"
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Updating values file:"
+          echo "  File:    ${VALUES_FILE}"
+          echo "  Service: ${SERVICE_KEY}"
+          echo "  Old tag: $(yq ".${SERVICE_KEY}.tag" ${VALUES_FILE})"
+          echo "  New tag: ${NEW_TAG}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          yq -i ".${SERVICE_KEY}.tag = \"${NEW_TAG}\"" ${VALUES_FILE}
+          
+          echo "✅ Updated tag:"
+          echo "  New value: $(yq ".${SERVICE_KEY}.tag" ${VALUES_FILE})"
+
+      - name: Verify Changes
+        run: |
+          echo "Git diff:"
+          git diff ${{ steps.target.outputs.values_file }}
+
+      - name: Commit and Push With Retry
+        run: |
+          git config user.name "MediShift DevOps Bot"
+          git config user.email "devops-bot@medishift.com"
+          
+          git add ${{ steps.target.outputs.values_file }}
+          
+          git commit -m "🚀 deploy(${{ inputs.service_key }}): update tag to ${{ inputs.image_version }}
+          
+          Service:     ${{ inputs.service_name }}
+          Environment: ${{ steps.target.outputs.environment }}
+          Namespace:   ${{ steps.target.outputs.namespace }}
+          Version:     ${{ inputs.image_version }}
+          Branch:      ${{ inputs.branch }}
+          Triggered:   ${{ github.sha }}
+          Run:         ${{ github.run_id }}"
+          
+          # Push with retry logic
+          for i in 1 2 3 4 5; do
+            echo "Push attempt ${i}..."
+            if git push origin HEAD; then
+              echo "✅ Push successful on attempt ${i}"
+              break
+            fi
+            
+            if [ $i -eq 5 ]; then
+              echo "❌ All 5 push attempts failed"
+              exit 1
+            fi
+            
+            echo "Push failed, pulling and retrying in $((i * 3)) seconds..."
+            git pull --rebase origin HEAD
+            sleep $((i * 3))
+          done
+
+      - name: Send Failure Email - CD
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "❌ FAILED - CD Deploy - ${{ inputs.service_name }} - ${{ steps.target.outputs.environment }}"
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: MediShift DevOps <${{ secrets.SMTP_USERNAME }}>
+          body: |
+            ❌ CD Manifest Update FAILED
+            
+            Service:     ${{ inputs.service_name }}
+            Environment: ${{ steps.target.outputs.environment }}
+            Version:     ${{ inputs.image_version }}
+            Branch:      ${{ inputs.branch }}
+            Workflow:    ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            Action Required:
+            - Check MANIFEST_REPO_PAT token is valid
+            - Check medishift-manifests repo permissions
+            - Verify yq can update the values file
+            
+            -- MediShift DevOps Pipeline
