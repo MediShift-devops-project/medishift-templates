@@ -47,7 +47,7 @@ jobs:
           to: ${{ secrets.ALERT_EMAIL }}
           from: MediShift DevOps <${{ secrets.SMTP_USERNAME }}>
           body: |
-            ⏳ DEPLOYMENT APPROVAL REQUIRED
+            DEPLOYMENT APPROVAL REQUIRED
             ══════════════════════════════════════
             
             Service:      ${{ inputs.service_name }}
@@ -59,7 +59,7 @@ jobs:
             Commit:       ${{ github.sha }}
             
             ══════════════════════════════════════
-            👉 APPROVE OR REJECT HERE:
+            APPROVE OR REJECT HERE:
             ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
             ══════════════════════════════════════
             
