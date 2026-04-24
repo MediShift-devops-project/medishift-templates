@@ -36,6 +36,13 @@ jobs:
   docker:
     name: Docker Build + Trivy + Push
     runs-on: ubuntu-latest
+    # ─────────────────────────────────────────
+    # ADD THIS PERMISSIONS BLOCK
+    # ─────────────────────────────────────────
+    permissions:
+      contents: write       # needed to create git tags
+      security-events: write # needed for trivy sarif upload
+    # ─────────────────────────────────────────
     outputs:
       image_version: ${{ steps.versioning.outputs.new_tag }}
       image_full_tag: ${{ steps.versioning.outputs.new_tag }}-${{ github.sha }}
