@@ -148,6 +148,8 @@
 #             -- MediShift DevOps Pipeline
 
 
+
+
 name: Template - CD Update Manifests
 
 on:
@@ -193,8 +195,6 @@ on:
       PROD_DB_PASSWORD:
         required: true
       PROD_DB_NAME:
-        required: true
-      KUBECONFIG_BASE64:
         required: true
 
 jobs:
@@ -244,13 +244,28 @@ jobs:
           yq --version
 
       # ─────────────────────────────────────────
-      # STEP 4: Update image tag in values file
+      # STEP 4: Update image tag + inject secrets
       # ─────────────────────────────────────────
-      - name: Update Image Tag in Values File
+      - name: Update Helm Values - Tag and Secrets
         run: |
           VALUES_FILE="${{ steps.target.outputs.values_file }}"
           SERVICE_KEY="${{ inputs.service_key }}"
           NEW_TAG="${{ inputs.image_version }}"
+
+          # Select secrets based on branch
+          if [ "${{ inputs.branch }}" = "main" ]; then
+            DB_URL="${{ secrets.PROD_DB_URL }}"
+            JWT_SECRET="${{ secrets.PROD_JWT_SECRET }}"
+            DB_USER="${{ secrets.PROD_DB_USER }}"
+            DB_PASSWORD="${{ secrets.PROD_DB_PASSWORD }}"
+            DB_NAME="${{ secrets.PROD_DB_NAME }}"
+          else
+            DB_URL="${{ secrets.DEV_DB_URL }}"
+            JWT_SECRET="${{ secrets.DEV_JWT_SECRET }}"
+            DB_USER="${{ secrets.DEV_DB_USER }}"
+            DB_PASSWORD="${{ secrets.DEV_DB_PASSWORD }}"
+            DB_NAME="${{ secrets.DEV_DB_NAME }}"
+          fi
 
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "File:    ${VALUES_FILE}"
@@ -259,9 +274,20 @@ jobs:
           echo "New tag: ${NEW_TAG}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+          # Update image tag
           yq -i ".${SERVICE_KEY}.tag = \"${NEW_TAG}\"" ${VALUES_FILE}
 
-          echo "✅ Updated: $(yq ".${SERVICE_KEY}.tag" ${VALUES_FILE})"
+          # Inject secrets from GitHub Secrets
+          yq -i ".secrets.create = true" ${VALUES_FILE}
+          yq -i ".secrets.databaseUrl = \"${DB_URL}\"" ${VALUES_FILE}
+          yq -i ".secrets.jwtSecret = \"${JWT_SECRET}\"" ${VALUES_FILE}
+          yq -i ".secrets.postgresUser = \"${DB_USER}\"" ${VALUES_FILE}
+          yq -i ".secrets.postgresPassword = \"${DB_PASSWORD}\"" ${VALUES_FILE}
+          yq -i ".secrets.postgresDb = \"${DB_NAME}\"" ${VALUES_FILE}
+
+          echo "✅ Tag updated:     $(yq ".${SERVICE_KEY}.tag" ${VALUES_FILE})"
+          echo "✅ Secrets injected into ${VALUES_FILE}"
+          echo "✅ secrets.create:  $(yq ".secrets.create" ${VALUES_FILE})"
 
       # ─────────────────────────────────────────
       # STEP 5: Commit and push with retry
@@ -298,70 +324,22 @@ jobs:
           done
 
       # ─────────────────────────────────────────
-      # STEP 6: Setup kubectl
+      # STEP 6: Verify values file looks correct
       # ─────────────────────────────────────────
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v4
-        with:
-          version: 'latest'
-
-      # ─────────────────────────────────────────
-      # STEP 7: Setup kubeconfig
-      # ─────────────────────────────────────────
-      - name: Setup Kubeconfig
+      - name: Verify Values File
         run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
-          kubectl cluster-info
-
-      # ─────────────────────────────────────────
-      # STEP 8: Create or update Kubernetes secret
-      # ─────────────────────────────────────────
-      - name: Create or Update Kubernetes Secret
-        run: |
-          NAMESPACE="${{ steps.target.outputs.namespace }}"
-
-          if [ "${{ inputs.branch }}" = "main" ]; then
-            DB_URL="${{ secrets.PROD_DB_URL }}"
-            JWT_SECRET="${{ secrets.PROD_JWT_SECRET }}"
-            DB_USER="${{ secrets.PROD_DB_USER }}"
-            DB_PASSWORD="${{ secrets.PROD_DB_PASSWORD }}"
-            DB_NAME="${{ secrets.PROD_DB_NAME }}"
-          else
-            DB_URL="${{ secrets.DEV_DB_URL }}"
-            JWT_SECRET="${{ secrets.DEV_JWT_SECRET }}"
-            DB_USER="${{ secrets.DEV_DB_USER }}"
-            DB_PASSWORD="${{ secrets.DEV_DB_PASSWORD }}"
-            DB_NAME="${{ secrets.DEV_DB_NAME }}"
-          fi
-
+          VALUES_FILE="${{ steps.target.outputs.values_file }}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "Creating medishift-secrets in namespace: ${NAMESPACE}"
+          echo "Final tag:            $(yq ".${{ inputs.service_key }}.tag" ${VALUES_FILE})"
+          echo "secrets.create:       $(yq ".secrets.create" ${VALUES_FILE})"
+          echo "secrets.postgresUser: $(yq ".secrets.postgresUser" ${VALUES_FILE})"
+          echo "secrets.postgresDb:   $(yq ".secrets.postgresDb" ${VALUES_FILE})"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-          kubectl create secret generic medishift-secrets \
-            --namespace="${NAMESPACE}" \
-            --from-literal=DATABASE_URL="${DB_URL}" \
-            --from-literal=JWT_SECRET="${JWT_SECRET}" \
-            --from-literal=POSTGRES_USER="${DB_USER}" \
-            --from-literal=POSTGRES_PASSWORD="${DB_PASSWORD}" \
-            --from-literal=POSTGRES_DB="${DB_NAME}" \
-            --dry-run=client -o yaml | kubectl apply -f -
-
-          echo "✅ Secret created/updated successfully"
+          echo "✅ Values file verified"
+          echo "✅ ArgoCD will auto-sync and apply secrets to cluster"
 
       # ─────────────────────────────────────────
-      # STEP 9: Verify secret exists
-      # ─────────────────────────────────────────
-      - name: Verify Kubernetes Secret
-        run: |
-          NAMESPACE="${{ steps.target.outputs.namespace }}"
-          kubectl get secret medishift-secrets -n "${NAMESPACE}"
-          echo "✅ Secret verified in ${NAMESPACE}"
-
-      # ─────────────────────────────────────────
-      # STEP 10: Failure email
+      # STEP 7: Failure email
       # ─────────────────────────────────────────
       - name: Send Failure Email - CD
         if: failure()
@@ -386,8 +364,8 @@ jobs:
 
             Action Required:
             - Check MANIFEST_REPO_PAT token is valid
-            - Check KUBECONFIG_BASE64 is correct
             - Check medishift-manifests repo permissions
             - Verify yq can update the values file
+            - Check GitHub Org Secrets are set correctly
 
             -- MediShift DevOps Pipeline
