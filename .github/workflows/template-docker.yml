@@ -36,13 +36,9 @@ jobs:
   docker:
     name: Docker Build + Trivy + Push
     runs-on: ubuntu-latest
-    # ─────────────────────────────────────────
-    # ADD THIS PERMISSIONS BLOCK
-    # ─────────────────────────────────────────
     permissions:
-      contents: write       # needed to create git tags
-      security-events: write # needed for trivy sarif upload
-    # ─────────────────────────────────────────
+      contents: write       # create git tags
+      security-events: write # trivy sarif upload
     outputs:
       image_version: ${{ steps.versioning.outputs.new_tag }}
       image_full_tag: ${{ steps.versioning.outputs.new_tag }}-${{ github.sha }}
@@ -155,11 +151,11 @@ jobs:
           secure: true
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "❌ FAILED - Docker Build/Push - ${{ inputs.service_name }}"
+          subject: "FAILED - Docker Build/Push - ${{ inputs.service_name }}"
           to: ${{ secrets.ALERT_EMAIL }}
           from: MediShift DevOps <${{ secrets.SMTP_USERNAME }}>
           body: |
-            ❌ Docker Build/Push FAILED
+            Docker Build/Push FAILED
             
             Service:    ${{ inputs.service_name }}
             Branch:     ${{ github.ref_name }}
