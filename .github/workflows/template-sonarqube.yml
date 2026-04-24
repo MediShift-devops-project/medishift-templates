@@ -79,11 +79,11 @@ jobs:
           secure: true
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "❌ FAILED - SonarQube Scan - ${{ inputs.service_name }}"
+          subject: "FAILED - SonarQube Scan - ${{ inputs.service_name }}"
           to: ${{ secrets.ALERT_EMAIL }}
           from: MediShift DevOps <${{ secrets.SMTP_USERNAME }}>
           body: |
-            ❌ SonarQube SAST Scan FAILED
+            SonarQube SAST Scan FAILED
             
             Service:    ${{ inputs.service_name }}
             Branch:     ${{ github.ref_name }}
