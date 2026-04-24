@@ -41,7 +41,10 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         run: |
           if [ -f package-lock.json ]; then
-            npm ci
+            npm ci || {
+              echo "npm ci failed - lock file out of sync, running npm install"
+              npm install
+            }
           else
             npm install
           fi
